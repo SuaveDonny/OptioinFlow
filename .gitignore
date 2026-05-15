@@ -1,3 +1,26 @@
-node_modules/
+# Secrets — NEVER commit
 .env
+.env.local
+.env.*.local
+
+# Dependencies (huge, rebuilt by start.sh)
+node_modules/
+server/node_modules/
+frontend/node_modules/
+
+# Logs
 *.log
+server.log
+frontend.log
+
+# Build output
+frontend/dist/
+frontend/build/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
