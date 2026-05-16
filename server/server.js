@@ -13,32 +13,28 @@ if (!ANTHROPIC_KEY) {
   process.exit(1);
 }
 
-const TICKERS = ["SPY", "QQQ", "IWM", "NVDA", "AMD", "INTC", "AVGO", "MU", "TSM", "QCOM", "AMAT"];
+const SECTIONS = {
+  etfs:       { label: "ETF Index Plays — SPY · QQQ · IWM", icon: "📊", tickers: ["SPY", "QQQ", "IWM"] },
+  semis:      { label: "Semiconductors",                    icon: "🔬", tickers: ["NVDA", "AMD", "INTC", "AVGO", "MU", "TSM", "QCOM", "AMAT"] },
+  megacaps:   { label: "Mega-Caps",                         icon: "🏛️", tickers: ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "TSLA"] },
+  financials: { label: "Financials",                        icon: "🏦", tickers: ["JPM", "BAC", "GS", "WFC", "C"] },
+  energy:     { label: "Energy",                            icon: "⚡", tickers: ["XLE", "XOM", "CVX", "COP", "OXY"] },
+  crypto:     { label: "Crypto-Adjacent",                   icon: "₿",  tickers: ["COIN", "MSTR", "MARA", "RIOT"] },
+  healthcare: { label: "Healthcare",                        icon: "⚕️", tickers: ["UNH", "LLY", "JNJ", "PFE"] },
+};
 
-async function fetchYahooQuote(ticker) {
-  const url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker + "?interval=1d&range=1d&includePrePost=true";
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" },
-  });
-  if (!res.ok) throw new Error("Yahoo returned " + res.status);
-  const json = await res.json();
-  const meta = json?.chart?.result?.[0]?.meta;
-  if (!meta) return null;
+const TIMEFRAMES = {
+  "0dte":    { label: "0DTE",    daysMin: 0,  daysMax: 1,   description: "Same-day expiry, extreme gamma" },
+  "weekly":  { label: "Weekly",  daysMin: 2,  daysMax: 9,   description: "1-week expiry, balanced theta" },
+  "monthly": { label: "Monthly", daysMin: 21, daysMax: 35,  description: "Standard monthly cycle" },
+  "45dte":   { label: "45 DTE",  daysMin: 38, daysMax: 55,  description: "Tasty-Trade sweet spot" },
+};
 
-  const preMarketPrice = meta.preMarketPrice ?? null;
-  const regularMarketPrice = meta.regularMarketPrice;
-  const prevClose = meta.previousClose ?? meta.chartPreviousClose;
-  const displayPrice = preMarketPrice ?? regularMarketPrice;
-  const change = displayPrice && prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : null;
+const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
 
-  return {
-    ticker,
-    price: displayPrice ? displayPrice.toFixed(2) : null,
-    prevClose: prevClose ? prevClose.toFixed(2) : null,
-    change: change !== null ? +change.toFixed(2) : null,
-    isPreMarket: !!preMarketPrice,
-    volume: meta.regularMarketVolume ? formatVolume(meta.regularMarketVolume) : null,
-  };
+function getAllTickers(customWatchlist = []) {
+  const base = Object.values(SECTIONS).flatMap(s => s.tickers);
+  return [...new Set([...base, "^VIX", ...customWatchlist])];
 }
 
 function formatVolume(v) {
@@ -48,28 +44,243 @@ function formatVolume(v) {
   return v.toString();
 }
 
-app.get("/api/market-data", async (req, res) => {
+async function fetchYahooQuote(ticker) {
+  const url = "https://query1.finance.yahoo.com/v8/finance/chart/" + ticker + "?interval=1d&range=1d&includePrePost=true";
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  if (!res.ok) throw new Error("Yahoo returned " + res.status);
+  const json = await res.json();
+  const meta = json?.chart?.result?.[0]?.meta;
+  if (!meta) return null;
+  const preMarketPrice = meta.preMarketPrice ?? null;
+  const regularMarketPrice = meta.regularMarketPrice;
+  const prevClose = meta.previousClose ?? meta.chartPreviousClose;
+  const displayPrice = preMarketPrice ?? regularMarketPrice;
+  const change = displayPrice && prevClose ? ((displayPrice - prevClose) / prevClose) * 100 : null;
+  return {
+    ticker,
+    price: displayPrice ? displayPrice.toFixed(2) : null,
+    rawPrice: displayPrice,
+    prevClose: prevClose ? prevClose.toFixed(2) : null,
+    change: change !== null ? +change.toFixed(2) : null,
+    isPreMarket: !!preMarketPrice,
+    volume: meta.regularMarketVolume ? formatVolume(meta.regularMarketVolume) : null,
+  };
+}
+
+async function fetchEarningsDate(ticker) {
+  try {
+    const url = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/" + ticker + "?modules=calendarEvents";
+    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const earnings = json?.quoteSummary?.result?.[0]?.calendarEvents?.earnings?.earningsDate;
+    if (!earnings || !earnings.length) return null;
+    const earningsDate = earnings[0]?.raw;
+    if (!earningsDate) return null;
+    const now = Math.floor(Date.now() / 1000);
+    const sevenDays = 7 * 24 * 60 * 60;
+    return {
+      timestamp: earningsDate,
+      daysUntil: Math.round((earningsDate - now) / 86400),
+      withinWeek: earningsDate >= now && earningsDate <= now + sevenDays,
+      dateString: new Date(earningsDate * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatOption(opt) {
+  return {
+    strike: opt.strike,
+    bid: opt.bid || 0,
+    ask: opt.ask || 0,
+    mid: opt.bid && opt.ask ? +((opt.bid + opt.ask) / 2).toFixed(2) : null,
+    last: opt.lastPrice || 0,
+    volume: opt.volume || 0,
+    openInterest: opt.openInterest || 0,
+    iv: opt.impliedVolatility ? +(opt.impliedVolatility * 100).toFixed(1) : null,
+    inTheMoney: opt.inTheMoney,
+  };
+}
+
+function calculateAvgIV(calls, puts) {
+  const all = [...calls, ...puts].filter(o => o.impliedVolatility);
+  if (!all.length) return null;
+  const avg = all.reduce((s, o) => s + o.impliedVolatility, 0) / all.length;
+  return +(avg * 100).toFixed(1);
+}
+
+async function fetchOptionsChain(ticker, targetDaysMin, targetDaysMax) {
+  try {
+    const url = "https://query2.finance.yahoo.com/v7/finance/options/" + ticker;
+    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json?.optionChain?.result?.[0];
+    if (!result) return null;
+
+    const expirations = result.expirationDates || [];
+    const now = Math.floor(Date.now() / 1000);
+
+    const matchingExpirations = expirations.filter(exp => {
+      const days = (exp - now) / 86400;
+      return days >= targetDaysMin && days <= targetDaysMax;
+    });
+
+    if (matchingExpirations.length === 0) return null;
+
+    const targetMid = (targetDaysMin + targetDaysMax) / 2;
+    const bestExp = matchingExpirations.reduce((best, exp) => {
+      const days = (exp - now) / 86400;
+      const bestDays = (best - now) / 86400;
+      return Math.abs(days - targetMid) < Math.abs(bestDays - targetMid) ? exp : best;
+    });
+
+    const chainUrl = "https://query2.finance.yahoo.com/v7/finance/options/" + ticker + "?date=" + bestExp;
+    const chainRes = await fetch(chainUrl, { headers: { "User-Agent": USER_AGENT } });
+    if (!chainRes.ok) return null;
+    const chainJson = await chainRes.json();
+    const chainResult = chainJson?.optionChain?.result?.[0];
+    if (!chainResult) return null;
+
+    const options = chainResult.options?.[0];
+    const calls = options?.calls || [];
+    const puts = options?.puts || [];
+    const currentPrice = chainResult.quote?.regularMarketPrice || 0;
+
+    const findClosest = (arr, target) => {
+      if (!arr.length) return null;
+      return arr.reduce((best, opt) =>
+        Math.abs(opt.strike - target) < Math.abs(best.strike - target) ? opt : best
+      );
+    };
+
+    const atmCall = findClosest(calls, currentPrice);
+    const atmPut = findClosest(puts, currentPrice);
+    const otmCall = findClosest(calls.filter(c => c.strike > currentPrice * 1.02), currentPrice * 1.05);
+    const otmPut = findClosest(puts.filter(p => p.strike < currentPrice * 0.98), currentPrice * 0.95);
+
+    const expDate = new Date(bestExp * 1000);
+    const daysToExp = Math.round((bestExp - now) / 86400);
+
+    return {
+      expiry: expDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      daysToExp,
+      currentPrice,
+      atm: { call: atmCall ? formatOption(atmCall) : null, put: atmPut ? formatOption(atmPut) : null },
+      otm: { call: otmCall ? formatOption(otmCall) : null, put: otmPut ? formatOption(otmPut) : null },
+      callCount: calls.length,
+      putCount: puts.length,
+      avgIV: calculateAvgIV(calls, puts),
+    };
+  } catch (e) {
+    console.error("Options chain error for " + ticker + ":", e.message);
+    return null;
+  }
+}
+
+app.get("/api/sections", (req, res) => res.json(SECTIONS));
+app.get("/api/timeframes", (req, res) => res.json(TIMEFRAMES));
+
+app.post("/api/market-data", async (req, res) => {
+  const { customWatchlist = [] } = req.body || {};
+  const tickers = getAllTickers(customWatchlist);
   const results = {};
   await Promise.all(
-    TICKERS.map(async (t) => {
-      try { results[t] = await fetchYahooQuote(t); }
-      catch (e) { results[t] = { error: e.message }; }
+    tickers.map(async (t) => {
+      try {
+        const [quote, earnings] = await Promise.all([
+          fetchYahooQuote(t),
+          t.startsWith("^") ? null : fetchEarningsDate(t),
+        ]);
+        results[t] = { ...quote, earnings };
+      } catch (e) {
+        results[t] = { error: e.message };
+      }
     })
   );
   res.json(results);
 });
 
+app.post("/api/options-chains", async (req, res) => {
+  const { tickers = [], timeframe = "weekly" } = req.body || {};
+  const tf = TIMEFRAMES[timeframe];
+  if (!tf) return res.status(400).json({ error: "Invalid timeframe" });
+
+  const results = {};
+  const batchSize = 4;
+  for (let i = 0; i < tickers.length; i += batchSize) {
+    const batch = tickers.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (t) => {
+        if (t.startsWith("^")) return;
+        try {
+          results[t] = await fetchOptionsChain(t, tf.daysMin, tf.daysMax);
+        } catch (e) {
+          results[t] = { error: e.message };
+        }
+      })
+    );
+  }
+  res.json(results);
+});
+
 app.post("/api/generate-plays", async (req, res) => {
   try {
-    const { marketData } = req.body;
+    const { marketData, optionsChains, customWatchlist = [], timeframe = "weekly" } = req.body;
     const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const tf = TIMEFRAMES[timeframe];
 
-    const pmContext = Object.entries(marketData || {})
-      .filter(([, v]) => v && !v.error && v.price)
-      .map(([t, v]) => t + ": $" + v.price + " (" + (v.change >= 0 ? "+" : "") + v.change + "%, prev $" + v.prevClose + (v.isPreMarket ? ", pre-mkt" : "") + ")")
-      .join(" | ");
+    const sectionsForAI = { ...SECTIONS };
+    if (customWatchlist.length > 0) {
+      sectionsForAI.custom = { label: "My Watchlist", tickers: customWatchlist };
+    }
 
-    const prompt = "You are an expert options trader. Today is " + today + ".\n\nLIVE MARKET DATA:\n" + pmContext + "\n\nReturn ONLY a raw JSON object - no markdown, no backticks:\n{\n  \"etf_plays\": [\n    {\"ticker\":\"SPY\",\"strategy\":\"Iron Condor\",\"sentiment\":\"Neutral\",\"probability\":78,\"strike\":\"535/540/560/565\",\"expiry\":\"May 23\",\"iv\":18,\"rr\":\"1:2.4\",\"delta\":\"0.12\",\"maxProfit\":\"$320\",\"maxLoss\":\"$180\",\"rationale\":\"2-3 sentences using real price levels.\",\"premarketNote\":\"1 sentence on current move.\"}\n  ],\n  \"semi_plays\": [ ...same shape, 4 plays... ]\n}\n\nRules:\n- Exactly 3 ETF plays: SPY, QQQ, IWM\n- Exactly 4 semi plays from: NVDA, AMD, INTC, AVGO, MU, TSM, QCOM, AMAT\n- Use REAL prices from data above for strikes\n- Mix strategies and sentiments\n- Probability 62-84%";
+    const sectionContexts = Object.entries(sectionsForAI).map(([key, sec]) => {
+      const data = sec.tickers.map(t => {
+        const md = marketData?.[t];
+        const oc = optionsChains?.[t];
+        if (!md || md.error || !md.price) return null;
+        const earnFlag = md.earnings?.withinWeek ? " [EARNINGS " + md.earnings.dateString + "]" : "";
+        let info = t + ": $" + md.price + " (" + (md.change >= 0 ? "+" : "") + md.change + "%)" + earnFlag;
+        if (oc && !oc.error) {
+          info += " | Chain " + oc.expiry + " (" + oc.daysToExp + "d): ";
+          if (oc.atm?.call) info += "ATM Call " + oc.atm.call.strike + " $" + oc.atm.call.mid + " IV " + oc.atm.call.iv + "% ";
+          if (oc.otm?.call) info += "OTM Call " + oc.otm.call.strike + " $" + oc.otm.call.mid + " IV " + oc.otm.call.iv + "% ";
+          if (oc.otm?.put) info += "OTM Put " + oc.otm.put.strike + " $" + oc.otm.put.mid + " IV " + oc.otm.put.iv + "%";
+          if (oc.avgIV) info += " | Avg IV " + oc.avgIV + "%";
+        }
+        return info;
+      }).filter(Boolean).join("\n  ");
+      return key + " (" + sec.label + "):\n  " + data;
+    }).join("\n\n");
+
+    const vix = marketData?.["^VIX"];
+    const vixContext = vix && vix.price ? "VIX: " + vix.price + " (" + (vix.change >= 0 ? "+" : "") + vix.change + "%) — " +
+      (parseFloat(vix.price) < 15 ? "complacent, favor short premium" :
+       parseFloat(vix.price) < 20 ? "normal, balanced approach" :
+       parseFloat(vix.price) < 30 ? "elevated fear, favor long premium" :
+       "extreme fear, careful sizing") : "VIX unavailable";
+
+    const tfGuidance = timeframe === "0dte" ? "Favor scalps, lottery tickets, fast directional plays. Avoid wide spreads." :
+                       timeframe === "weekly" ? "Mix of credit spreads, covered calls, short straddles for premium collection." :
+                       timeframe === "monthly" ? "Standard cycle: iron condors, calendar spreads, longer credit spreads." :
+                       "Tasty-Trade zone: high probability iron condors, strangles, defined-risk spreads with ample theta.";
+
+    const prompt = "You are an expert options trader. Today is " + today + ".\n" +
+      "Selected timeframe: " + tf.label + " (" + tf.description + ")\n\n" +
+      "MARKET CONDITIONS:\n" + vixContext + "\n\n" +
+      "LIVE PRICES & OPTIONS CHAINS:\n" + sectionContexts + "\n\n" +
+      "CRITICAL: Use REAL strikes and prices from the chains above. Don't invent strikes.\n" +
+      "For " + tf.label + " timeframe, all plays must expire within " + tf.daysMin + "-" + tf.daysMax + " days.\n\n" +
+      "Strategy guidance: " + tfGuidance + "\n\n" +
+      "Return ONLY a raw JSON object — no markdown:\n" +
+      '{"plays":{"etfs":[{"ticker":"SPY","strategy":"...","sentiment":"Neutral","probability":78,"strike":"REAL_STRIKE","expiry":"REAL_EXPIRY","iv":REAL_IV,"rr":"1:2.4","delta":"0.12","maxProfit":"$320","maxLoss":"$180","rationale":"...","premarketNote":"..."}],"semis":[...3...],"megacaps":[...3...],"financials":[...2...],"energy":[...2...],"crypto":[...2...],"healthcare":[...2...]' +
+      (customWatchlist.length ? ',"custom":[...one per ticker...]' : '') + "}}\n\n" +
+      "Rules:\n- etfs/semis/megacaps: 3 plays each\n- financials/energy/crypto/healthcare: 2 each\n" +
+      (customWatchlist.length ? "- custom: one play per ticker in [" + customWatchlist.join(", ") + "]\n" : "") +
+      "- Probability 60-85%\n- Use real IV from chain data\n- Reference VIX and earnings where relevant";
 
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -80,7 +291,7 @@ app.post("/api/generate-plays", async (req, res) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5-20250929",
-        max_tokens: 2500,
+        max_tokens: 6000,
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -96,7 +307,6 @@ app.post("/api/generate-plays", async (req, res) => {
     const jsonEnd = raw.lastIndexOf("}");
     const jsonStr = jsonStart !== -1 ? raw.slice(jsonStart, jsonEnd + 1) : raw;
     const parsed = JSON.parse(jsonStr);
-
     res.json(parsed);
   } catch (e) {
     console.error("Generate plays failed:", e);
@@ -107,4 +317,6 @@ app.post("/api/generate-plays", async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log("Server running on http://localhost:" + PORT);
+  console.log("Sections:", Object.keys(SECTIONS).join(", "));
+  console.log("Timeframes:", Object.keys(TIMEFRAMES).join(", "));
 });
