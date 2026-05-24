@@ -568,7 +568,12 @@ console.log("Static path:", path.join(__dirname, "../frontend/dist"));
 const distPath = path.join(__dirname, "../frontend/dist");
 console.log("Dist path:", distPath);
 app.use(express.static(distPath));
-app.get("*", (req, res) => { res.sendFile(path.join(distPath, "index.html")); });
+
+
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api") || req.path.includes(".")) return next();
+  res.sendFile(path.join(distPath, "index.html"));
+});
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
