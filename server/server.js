@@ -190,6 +190,13 @@ async function fetchOptionsChain(ticker, targetDaysMin, targetDaysMax) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+app.get('/api/check-dist', (req, res) => {
+  const fs = require('fs');
+  try {
+    const files = fs.readdirSync(path.join(__dirname, '../frontend/dist'));
+    res.json({ files, distPath: path.join(__dirname, '../frontend/dist') });
+  } catch(e) { res.json({ error: e.message }); }
+});
 app.get("/api/sections", (req, res) => res.json(SECTIONS));
 app.get("/api/timeframes", (req, res) => res.json(TIMEFRAMES));
 
