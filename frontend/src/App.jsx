@@ -1,3 +1,11 @@
+// Global ngrok header interceptor
+const origFetch = window.fetch;
+window.fetch = (url, opts = {}) => {
+  if (typeof url === 'string' && url.includes('ngrok')) {
+    opts = { ...opts, headers: { ...(opts.headers || {}), 'ngrok-skip-browser-warning': 'true' } };
+  }
+  return origFetch(url, opts);
+};
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const HEADERS = () => ({ "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" });
