@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
+const HEADERS = () => ({ "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" });
 const API_BASE = (() => { const params = new URLSearchParams(window.location.search); const api = params.get("api"); if (api) return decodeURIComponent(api); return "http://192.168.0.56:3003"; })();
 const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 

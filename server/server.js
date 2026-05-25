@@ -18,7 +18,7 @@ import fetch from "node-fetch";
 import "dotenv/config";
 
 const app = express();
-app.use(cors({ origin: "*" }));
+app.use(cors({ origin: "*", methods: ["GET","POST","OPTIONS"], allowedHeaders: ["Content-Type","Authorization"] }));
 app.use(express.json());
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
