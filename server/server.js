@@ -18,7 +18,7 @@ import fetch from "node-fetch";
 import "dotenv/config";
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
@@ -581,3 +581,4 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("Sections:", Object.keys(SECTIONS).join(", "));
   console.log("Timeframes:", Object.keys(TIMEFRAMES).join(", "));
 });
+// Mon May 25 09:26:27 CDT 2026
