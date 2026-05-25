@@ -733,8 +733,8 @@ export default function App() {
   const [earningsLoading, setEarningsLoading] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/sections`).then(r => r.json()).then(setSections).catch(() => {});
-    fetch(`${API_BASE}/api/timeframes`).then(r => r.json()).then(setTimeframes).catch(() => {});
+    fetch(`${API_BASE}/api/sections`, { headers: { "ngrok-skip-browser-warning": "true" } }).then(r => r.json()).then(setSections).catch(() => {});
+    fetch(`${API_BASE}/api/timeframes`, { headers: { "ngrok-skip-browser-warning": "true" } }).then(r => r.json()).then(setTimeframes).catch(() => {});
   }, []);
 
   const fetchAlerts = useCallback(() => {
